@@ -5,7 +5,7 @@ class WebSocketClient {
   private url: string = ''
   private callbacks: Map<string, WebSocketCallback[]> = new Map()
   private reconnectInterval: number = 3000
-  private reconnectTimer: NodeJS.Timeout | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private isManualClose: boolean = false
 
   constructor(url: string) {

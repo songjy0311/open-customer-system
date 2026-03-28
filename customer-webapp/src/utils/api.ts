@@ -1,8 +1,8 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
+import axios, { AxiosResponse } from 'axios'
 
 const baseURL = '/api'
 
-const instance: AxiosInstance = axios.create({
+const instance = axios.create({
   baseURL,
   timeout: 10000,
   headers: {
@@ -24,7 +24,7 @@ instance.interceptors.request.use(
   }
 )
 
-// 响应拦截器
+// 响应拦截器 — 直接返回 response.data，类型为业务响应体
 instance.interceptors.response.use(
   (response: AxiosResponse) => {
     return response.data
@@ -35,4 +35,13 @@ instance.interceptors.response.use(
   }
 )
 
-export default instance
+// 用类型断言导出，使调用处类型推断为 Promise<any>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const api = instance as unknown as {
+  get(url: string, config?: object): Promise<any>
+  post(url: string, data?: unknown, config?: object): Promise<any>
+  put(url: string, data?: unknown, config?: object): Promise<any>
+  delete(url: string, config?: object): Promise<any>
+}
+
+export default api

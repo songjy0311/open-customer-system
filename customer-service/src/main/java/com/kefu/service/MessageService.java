@@ -22,8 +22,5 @@ public interface MessageService extends IService<Message> {
     Message sendMessage(Long conversationId, Integer senderType, String senderId, String senderName,
                         String content, Integer messageType);
 
-    /**
-     * 标记消息为已读
-     */
-    void markAsRead(Long conversationId, String receiverId);
+    List<Long> markAsRead(Long conversationId, String receiverId);
 }

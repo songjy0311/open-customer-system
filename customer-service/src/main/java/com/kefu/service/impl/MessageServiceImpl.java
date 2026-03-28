@@ -1,6 +1,7 @@
 package com.kefu.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.kefu.entity.Message;
 import com.kefu.mapper.MessageMapper;
@@ -8,6 +9,7 @@ import com.kefu.service.MessageService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class MessageServiceImpl extends ServiceImpl<MessageMapper, Message> implements MessageService {
@@ -42,12 +44,18 @@ public class MessageServiceImpl extends ServiceImpl<MessageMapper, Message> impl
     }
 
     @Override
-    public void markAsRead(Long conversationId, String receiverId) {
-        // 将该会话中非 receiver 发送的消息标记为已读
-        this.update(null, new LambdaQueryWrapper<Message>()
+    public List<Long> markAsRead(Long conversationId, String receiverId) {
+        List<Message> unread = this.list(new LambdaQueryWrapper<Message>()
                 .eq(Message::getConversationId, conversationId)
                 .ne(Message::getSenderId, receiverId)
-                .eq(Message::getIsRead, 0)
+                .eq(Message::getIsRead, 0));
+        if (unread.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = unread.stream().map(Message::getId).collect(Collectors.toList());
+        this.update(new LambdaUpdateWrapper<Message>()
+                .in(Message::getId, ids)
                 .set(Message::getIsRead, 1));
+        return ids;
     }
 }

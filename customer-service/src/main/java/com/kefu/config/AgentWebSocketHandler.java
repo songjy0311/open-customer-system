@@ -7,6 +7,7 @@ import com.kefu.enums.SenderType;
 import com.kefu.service.ConversationService;
 import com.kefu.service.MessageService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -14,6 +15,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,6 +29,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     private MessageService messageService;
 
     @Autowired
+    @Lazy
     private VisitorWebSocketHandler visitorWebSocketHandler;
 
     private final Map<String, WebSocketSession> agentSessions = new ConcurrentHashMap<>();
@@ -35,8 +38,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String agentId = getAgentId(session);
-        agentSessions.put(agentId, session);
-        System.out.println("客服连接建立: " + agentId);
+        String key = agentId != null ? agentId : session.getId();
+        agentSessions.put(key, session);
+        System.out.println("客服连接建立: " + key);
     }
 
     @Override
@@ -58,6 +62,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
             case "END_CONVERSATION":
                 handleEndConversation(session, data);
                 break;
+            case "MARK_READ":
+                handleMarkRead(session, data);
+                break;
             default:
                 break;
         }
@@ -66,7 +73,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String agentId = getAgentId(session);
-        agentSessions.remove(agentId);
+        if (agentId != null) {
+            agentSessions.remove(agentId);
+        }
         System.out.println("客服连接关闭: " + agentId);
     }
 
@@ -90,11 +99,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         String agentId = getAgentId(session);
         String agentNickname = (String) data.get("agentNickname");
 
-        // 保存消息
         Message message = messageService.sendMessage(conversationId, SenderType.AGENT, agentId,
                 agentNickname, content, messageType);
 
-        // 转发给访客
+        Map<String, Object> echoResult = Map.of(
+                "type", "NEW_MESSAGE",
+                "data", message
+        );
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(echoResult)));
+
         var conversation = conversationService.getById(conversationId);
         if (conversation != null) {
             visitorWebSocketHandler.sendToVisitor(conversation.getVisitorId(),
@@ -102,14 +115,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
                             "type", "NEW_MESSAGE",
                             "data", message
                     )));
-        }
 
-        // 返回发送成功
-        Map<String, Object> result = Map.of(
-                "type", "MESSAGE_SENT",
-                "data", Map.of("messageId", message.getId())
-        );
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(result)));
+            List<Long> readIds = messageService.markAsRead(conversationId, agentId);
+            if (!readIds.isEmpty()) {
+                visitorWebSocketHandler.notifyVisitorMessagesRead(
+                        conversation.getVisitorId(), conversationId, readIds);
+            }
+        }
     }
 
     private void handleTakeConversation(WebSocketSession session, Map<String, Object> data) throws IOException {
@@ -117,16 +129,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         Long agentId = ((Number) data.get("agentId")).longValue();
         String agentNickname = (String) data.get("agentNickname");
 
-        // 接手会话
         conversationService.takeConversation(conversationId, agentId, agentNickname);
 
-        // 通知访客
         var conversation = conversationService.getById(conversationId);
         if (conversation != null) {
             visitorWebSocketHandler.notifyVisitorTaken(conversation.getVisitorId(), conversationId, agentNickname);
+
+            List<Long> readIds = messageService.markAsRead(conversationId, agentId.toString());
+            if (!readIds.isEmpty()) {
+                visitorWebSocketHandler.notifyVisitorMessagesRead(
+                        conversation.getVisitorId(), conversationId, readIds);
+            }
         }
 
-        // 通知所有客服更新排队列表
         broadcastQueueUpdate();
     }
 
@@ -140,6 +155,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         var conversation = conversationService.getById(conversationId);
         if (conversation != null) {
             visitorWebSocketHandler.notifyVisitorEnded(conversation.getVisitorId(), conversationId);
+        }
+    }
+
+    private void handleMarkRead(WebSocketSession session, Map<String, Object> data) throws IOException {
+        Long conversationId = ((Number) data.get("conversationId")).longValue();
+        String agentId = getAgentId(session);
+
+        var conversation = conversationService.getById(conversationId);
+        if (conversation != null) {
+            List<Long> readIds = messageService.markAsRead(conversationId, agentId);
+            if (!readIds.isEmpty()) {
+                visitorWebSocketHandler.notifyVisitorMessagesRead(
+                        conversation.getVisitorId(), conversationId, readIds);
+            }
         }
     }
 

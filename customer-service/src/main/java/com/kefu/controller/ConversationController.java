@@ -1,9 +1,11 @@
 package com.kefu.controller;
 
+import com.kefu.config.VisitorWebSocketHandler;
 import com.kefu.dto.ConversationDTO;
 import com.kefu.dto.Result;
 import com.kefu.entity.Conversation;
 import com.kefu.service.ConversationService;
+import com.kefu.service.MessageService;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +19,12 @@ public class ConversationController {
 
     @Autowired
     private ConversationService conversationService;
+
+    @Autowired
+    private MessageService messageService;
+
+    @Autowired
+    private VisitorWebSocketHandler visitorWebSocketHandler;
 
     @GetMapping("/queue")
     public Result<List<ConversationDTO>> getQueueList() {
@@ -40,7 +48,24 @@ public class ConversationController {
     public Result<?> takeConversation(@PathVariable Long id, @RequestParam Long agentId,
                                         @RequestParam String agentNickname) {
         boolean success = conversationService.takeConversation(id, agentId, agentNickname);
-        return success ? Result.success() : Result.error("接手会话失败");
+        if (!success) {
+            return Result.error("接手会话失败");
+        }
+        try {
+            Conversation conversation = conversationService.getById(id);
+            if (conversation != null) {
+                visitorWebSocketHandler.notifyVisitorTaken(
+                        conversation.getVisitorId(), id, agentNickname);
+                List<Long> readIds = messageService.markAsRead(id, agentId.toString());
+                if (!readIds.isEmpty()) {
+                    visitorWebSocketHandler.notifyVisitorMessagesRead(
+                            conversation.getVisitorId(), id, readIds);
+                }
+            }
+        } catch (Exception e) {
+            // WebSocket 推送失败不影响接手结果
+        }
+        return Result.success();
     }
 
     @PostMapping("/{id}/transfer")
@@ -51,8 +76,19 @@ public class ConversationController {
 
     @PostMapping("/{id}/end")
     public Result<?> endConversation(@PathVariable Long id) {
+        Conversation conversation = conversationService.getById(id);
         boolean success = conversationService.endConversation(id);
-        return success ? Result.success() : Result.error("结束会话失败");
+        if (!success) {
+            return Result.error("结束会话失败");
+        }
+        try {
+            if (conversation != null) {
+                visitorWebSocketHandler.notifyVisitorEnded(conversation.getVisitorId(), id);
+            }
+        } catch (Exception e) {
+            // WebSocket 推送失败不影响结束结果
+        }
+        return Result.success();
     }
 
     private ConversationDTO convertToDTO(Conversation conversation) {

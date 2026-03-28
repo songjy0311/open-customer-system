@@ -9,6 +9,7 @@ import com.kefu.enums.SenderType;
 import com.kefu.service.ConversationService;
 import com.kefu.service.MessageService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -16,6 +17,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,6 +31,7 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
     private MessageService messageService;
 
     @Autowired
+    @Lazy
     private AgentWebSocketHandler agentWebSocketHandler;
 
     private final Map<String, WebSocketSession> visitorSessions = new ConcurrentHashMap<>();
@@ -37,8 +40,9 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String visitorId = getVisitorId(session);
-        visitorSessions.put(visitorId, session);
-        System.out.println("访客连接建立: " + visitorId);
+        String key = visitorId != null ? visitorId : session.getId();
+        visitorSessions.put(key, session);
+        System.out.println("访客连接建立: " + key);
     }
 
     @Override
@@ -65,7 +69,9 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String visitorId = getVisitorId(session);
-        visitorSessions.remove(visitorId);
+        if (visitorId != null) {
+            visitorSessions.remove(visitorId);
+        }
         System.out.println("访客连接关闭: " + visitorId);
     }
 
@@ -99,15 +105,13 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
         Message message = messageService.sendMessage(conversationId, SenderType.VISITOR, visitorId,
                 "访客", content, messageType);
 
-        // 转发给客服
-        agentWebSocketHandler.broadcastToAgent(conversationId, message);
-
-        // 返回发送成功
-        Map<String, Object> result = Map.of(
-                "type", "MESSAGE_SENT",
-                "data", Map.of("messageId", message.getId())
+        Map<String, Object> visitorResult = Map.of(
+                "type", "NEW_MESSAGE",
+                "data", message
         );
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(result)));
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(visitorResult)));
+
+        agentWebSocketHandler.broadcastToAgent(conversationId, message);
     }
 
     private void handleMessageRead(WebSocketSession session, Map<String, Object> data) throws IOException {
@@ -131,6 +135,17 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
                         "conversationId", conversationId,
                         "agentNickname", agentNickname,
                         "status", ConversationStatus.IN_PROGRESS
+                )
+        );
+        sendToVisitor(visitorId, objectMapper.writeValueAsString(result));
+    }
+
+    public void notifyVisitorMessagesRead(String visitorId, Long conversationId, List<Long> readMessageIds) throws IOException {
+        Map<String, Object> result = Map.of(
+                "type", "MESSAGES_READ",
+                "data", Map.of(
+                        "conversationId", conversationId,
+                        "readMessageIds", readMessageIds
                 )
         );
         sendToVisitor(visitorId, objectMapper.writeValueAsString(result));

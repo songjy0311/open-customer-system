@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Message, Input, Button, Badge, Space } from 'antd'
-import { CustomerServiceOutlined, SendOutlined, CloseOutlined, MinOutlined } from '@ant-design/icons'
-import WebSocketClient from '../utils/websocket'
+import { message, Input, Button, Badge, Space } from 'antd'
+import { CustomerServiceOutlined, SendOutlined, CloseOutlined, MinusOutlined } from '@ant-design/icons'
+import WebSocketClient from '../../utils/websocket'
 
-interface Message {
+interface ChatMessage {
   id: number
   conversationId: number
   senderType: number
@@ -11,22 +11,34 @@ interface Message {
   senderName: string
   content: string
   messageType: number
+  isRead: number
   createdAt: string
+}
+
+interface SystemNotice {
+  id: string
+  type: 'system'
+  content: string
+}
+
+type ChatItem = ChatMessage | SystemNotice
+
+function isSystemNotice(item: ChatItem): item is SystemNotice {
+  return (item as SystemNotice).type === 'system'
 }
 
 const VisitorChat: React.FC = () => {
   const [open, setOpen] = useState(false)
   const [minimized, setMinimized] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [chatItems, setChatItems] = useState<ChatItem[]>([])
   const [inputValue, setInputValue] = useState('')
   const [conversationId, setConversationId] = useState<number | null>(null)
-  const [status, setStatus] = useState<number>(0) // 0: 未连接, 1: 等待中, 2: 进行中, 3: 已结束
+  const [status, setStatus] = useState<number>(0)
   const [queuePosition, setQueuePosition] = useState(0)
   const [agentNickname, setAgentNickname] = useState('')
   const wsRef = useRef<WebSocketClient | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // 生成访客ID
   const getVisitorId = () => {
     let visitorId = localStorage.getItem('visitorId')
     if (!visitorId) {
@@ -38,41 +50,60 @@ const VisitorChat: React.FC = () => {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [chatItems])
 
   const initWebSocket = () => {
+    const visitorId = getVisitorId()
     const wsUrl = import.meta.env.PROD
-      ? `wss://${location.host}/ws/visitor`
-      : `ws://localhost:8080/ws/visitor`
+      ? `wss://${location.host}/ws/visitor?visitorId=${visitorId}`
+      : `ws://localhost:8080/ws/visitor?visitorId=${visitorId}`
     const ws = new WebSocketClient(wsUrl)
     ws.connect()
       .then(() => {
         ws.send({
           type: 'VISITOR_JOIN',
-          visitorId: getVisitorId(),
+          visitorId,
           nickname: '访客'
         })
       })
       .catch(console.error)
 
-    ws.on('CONVERSATION_STARTED', (data) => {
+    ws.on('CONVERSATION_STARTED', (data: { data: { conversationId: number; status: number; agentNickname?: string; queuePosition?: number } }) => {
       setConversationId(data.data.conversationId)
       setStatus(data.data.status)
       if (data.data.agentNickname) {
         setAgentNickname(data.data.agentNickname)
+        const notice: SystemNotice = {
+          id: `notice_${Date.now()}`,
+          type: 'system',
+          content: `客服 ${data.data.agentNickname} 已接入，开始为您服务`
+        }
+        setChatItems((prev) => [...prev, notice])
       }
       if (data.data.queuePosition) {
         setQueuePosition(data.data.queuePosition)
       }
     })
 
-    ws.on('NEW_MESSAGE', (data) => {
-      setMessages((prev) => [...prev, data.data])
+    ws.on('NEW_MESSAGE', (data: { data: ChatMessage }) => {
+      setChatItems((prev) => [...prev, data.data])
     })
 
-    ws.on('CONVERSATION_ENDED', (data) => {
+    ws.on('MESSAGES_READ', (data: { data: { conversationId: number; readMessageIds: number[] } }) => {
+      const readSet = new Set(data.data.readMessageIds)
+      setChatItems((prev) =>
+        prev.map((item) => {
+          if (!isSystemNotice(item) && readSet.has(item.id)) {
+            return { ...item, isRead: 1 }
+          }
+          return item
+        })
+      )
+    })
+
+    ws.on('CONVERSATION_ENDED', (_data: unknown) => {
       setStatus(3)
-      Message.info('会话已结束，请对本次服务进行评价')
+      message.info('会话已结束，请对本次服务进行评价')
     })
 
     wsRef.current = ws
@@ -82,7 +113,6 @@ const VisitorChat: React.FC = () => {
     if (!inputValue.trim()) return
 
     if (!conversationId) {
-      // 首次发送消息，创建会话
       initWebSocket()
       setOpen(true)
       setMinimized(false)
@@ -111,9 +141,17 @@ const VisitorChat: React.FC = () => {
     }
   }
 
+  const renderReadStatus = (item: ChatMessage) => {
+    if (item.senderType !== 1) return null
+    return (
+      <div style={{ fontSize: 11, marginTop: 2, textAlign: 'right', color: item.isRead === 1 ? '#1890ff' : '#999' }}>
+        {item.isRead === 1 ? '已读' : '未读'}
+      </div>
+    )
+  }
+
   return (
     <>
-      {/* 咨询浮窗 */}
       {!open && (
         <div
           onClick={() => {
@@ -142,7 +180,6 @@ const VisitorChat: React.FC = () => {
         </div>
       )}
 
-      {/* 聊天窗口 */}
       {open && (
         <div
           style={{
@@ -159,7 +196,6 @@ const VisitorChat: React.FC = () => {
             overflow: 'hidden'
           }}
         >
-          {/* 头部 */}
           <div
             style={{
               height: 56,
@@ -179,7 +215,7 @@ const VisitorChat: React.FC = () => {
               <span style={{ color: '#fff', fontSize: 12 }}>{getStatusText()}</span>
               <Button
                 type="text"
-                icon={<MinOutlined />}
+                icon={<MinusOutlined />}
                 onClick={() => setMinimized(true)}
                 style={{ color: '#fff' }}
               />
@@ -192,37 +228,54 @@ const VisitorChat: React.FC = () => {
             </Space>
           </div>
 
-          {/* 消息列表 */}
           <div style={{ height: 340, overflow: 'auto', padding: 16 }}>
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: msg.senderType === 1 ? 'flex-start' : 'flex-end',
-                  marginBottom: 12
-                }}
-              >
+            {chatItems.map((item) => {
+              if (isSystemNotice(item)) {
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      textAlign: 'center',
+                      margin: '8px 0',
+                      fontSize: 12,
+                      color: '#999'
+                    }}
+                  >
+                    {item.content}
+                  </div>
+                )
+              }
+              return (
                 <div
+                  key={item.id}
                   style={{
-                    maxWidth: '70%',
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    background: msg.senderType === 1 ? '#f0f0f0' : '#1890ff',
-                    color: msg.senderType === 1 ? '#333' : '#fff'
+                    display: 'flex',
+                    justifyContent: item.senderType === 1 ? 'flex-end' : 'flex-start',
+                    marginBottom: 12
                   }}
                 >
-                  <div style={{ fontSize: 12, marginBottom: 4, opacity: 0.7 }}>
-                    {msg.senderName}
+                  <div style={{ maxWidth: '70%' }}>
+                    <div
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: 8,
+                        background: item.senderType === 1 ? '#1890ff' : '#f0f0f0',
+                        color: item.senderType === 1 ? '#fff' : '#333'
+                      }}
+                    >
+                      <div style={{ fontSize: 12, marginBottom: 4, opacity: 0.7 }}>
+                        {item.senderName}
+                      </div>
+                      {item.content}
+                    </div>
+                    {renderReadStatus(item)}
                   </div>
-                  {msg.content}
                 </div>
-              </div>
-            ))}
+              )
+            })}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 输入框 */}
           <div style={{ padding: 16, borderTop: '1px solid #f0f0f0' }}>
             <Space.Compact style={{ width: '100%' }}>
               <Input
