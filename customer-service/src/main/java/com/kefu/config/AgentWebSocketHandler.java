@@ -99,28 +99,37 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         String agentId = getAgentId(session);
         String agentNickname = (String) data.get("agentNickname");
 
-        Message message = messageService.sendMessage(conversationId, SenderType.AGENT, agentId,
+        // 安全校验：确认该客服确实负责这个会话
+        var conversation = conversationService.getById(conversationId);
+        if (conversation == null) {
+            System.err.println("会话不存在, conversationId=" + conversationId);
+            return;
+        }
+        if (conversation.getAgentId() == null || !conversation.getAgentId().toString().equals(agentId)) {
+            System.err.println("客服 " + agentId + " 试图向不属于他的会话 " + conversationId + " 发消息");
+            return;
+        }
+
+        Message savedMessage = messageService.sendMessage(conversationId, SenderType.AGENT, agentId,
                 agentNickname, content, messageType);
 
-        Map<String, Object> echoResult = Map.of(
+        // 1. 回显给客服自己
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
                 "type", "NEW_MESSAGE",
-                "data", message
-        );
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(echoResult)));
+                "data", savedMessage
+        ))));
 
-        var conversation = conversationService.getById(conversationId);
-        if (conversation != null) {
-            visitorWebSocketHandler.sendToVisitor(conversation.getVisitorId(),
-                    objectMapper.writeValueAsString(Map.of(
-                            "type", "NEW_MESSAGE",
-                            "data", message
-                    )));
+        // 2. 推送给对应访客（用数据库中的 visitorId）
+        visitorWebSocketHandler.sendToVisitor(conversation.getVisitorId(), objectMapper.writeValueAsString(Map.of(
+                "type", "NEW_MESSAGE",
+                "data", savedMessage
+        )));
 
-            List<Long> readIds = messageService.markAsRead(conversationId, agentId);
-            if (!readIds.isEmpty()) {
-                visitorWebSocketHandler.notifyVisitorMessagesRead(
-                        conversation.getVisitorId(), conversationId, readIds);
-            }
+        // 3. 标记已读并通知访客
+        List<Long> readIds = messageService.markAsRead(conversationId, agentId);
+        if (!readIds.isEmpty()) {
+            visitorWebSocketHandler.notifyVisitorMessagesRead(
+                    conversation.getVisitorId(), conversationId, readIds);
         }
     }
 
@@ -133,8 +142,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
 
         var conversation = conversationService.getById(conversationId);
         if (conversation != null) {
-            visitorWebSocketHandler.notifyVisitorTaken(conversation.getVisitorId(), conversationId, agentNickname);
+            // 1. 通知访客已被接手，并附带历史消息
+            visitorWebSocketHandler.notifyVisitorTaken(conversation.getVisitorId(), conversationId, agentNickname, agentId);
 
+            // 2. 标记访客之前发送的消息为已读
             List<Long> readIds = messageService.markAsRead(conversationId, agentId.toString());
             if (!readIds.isEmpty()) {
                 visitorWebSocketHandler.notifyVisitorMessagesRead(
@@ -148,10 +159,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     private void handleEndConversation(WebSocketSession session, Map<String, Object> data) throws IOException {
         Long conversationId = ((Number) data.get("conversationId")).longValue();
 
-        // 结束会话
         conversationService.endConversation(conversationId);
 
-        // 通知访客
         var conversation = conversationService.getById(conversationId);
         if (conversation != null) {
             visitorWebSocketHandler.notifyVisitorEnded(conversation.getVisitorId(), conversationId);
@@ -173,32 +182,29 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void broadcastToAgent(Long conversationId, Message message) throws IOException {
-        // 找到负责该会话的客服并发送消息
         var conversation = conversationService.getById(conversationId);
         if (conversation != null && conversation.getAgentId() != null) {
             String agentId = conversation.getAgentId().toString();
             WebSocketSession session = agentSessions.get(agentId);
             if (session != null && session.isOpen()) {
-                Map<String, Object> result = Map.of(
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
                         "type", "NEW_MESSAGE",
                         "data", message
-                );
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(result)));
+                ))));
             }
         }
     }
 
     public void broadcastQueueUpdate() throws IOException {
         var queueList = conversationService.getQueueList();
-        Map<String, Object> result = Map.of(
+        String message = objectMapper.writeValueAsString(Map.of(
                 "type", "QUEUE_UPDATE",
                 "data", queueList
-        );
-        String message = objectMapper.writeValueAsString(result);
+        ));
 
-        for (WebSocketSession session : agentSessions.values()) {
-            if (session.isOpen()) {
-                session.sendMessage(new TextMessage(message));
+        for (WebSocketSession s : agentSessions.values()) {
+            if (s.isOpen()) {
+                s.sendMessage(new TextMessage(message));
             }
         }
     }

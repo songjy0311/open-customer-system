@@ -68,20 +68,37 @@ const VisitorChat: React.FC = () => {
       })
       .catch(console.error)
 
-    ws.on('CONVERSATION_STARTED', (data: { data: { conversationId: number; status: number; agentNickname?: string; queuePosition?: number } }) => {
-      setConversationId(data.data.conversationId)
-      setStatus(data.data.status)
-      if (data.data.agentNickname) {
-        setAgentNickname(data.data.agentNickname)
+    ws.on('CONVERSATION_STARTED', (data: {
+      data: {
+        conversationId: number
+        status: number
+        agentNickname?: string
+        queuePosition?: number
+        historyMessages?: ChatMessage[]
+      }
+    }) => {
+      const { conversationId: convId, status: convStatus, agentNickname: agent, queuePosition: pos, historyMessages } = data.data
+
+      // 加载历史消息（客服接手时会推送）
+      if (historyMessages && historyMessages.length > 0) {
+        const items: ChatItem[] = historyMessages.map((msg) => ({ ...msg }))
+        setChatItems(items)
+      } else {
+        setChatItems([])
+      }
+
+      setConversationId(convId)
+      setStatus(convStatus)
+      setQueuePosition(pos || 0)
+
+      if (agent) {
+        setAgentNickname(agent)
         const notice: SystemNotice = {
           id: `notice_${Date.now()}`,
           type: 'system',
-          content: `客服 ${data.data.agentNickname} 已接入，开始为您服务`
+          content: `客服 ${agent} 已接入，开始为您服务`
         }
         setChatItems((prev) => [...prev, notice])
-      }
-      if (data.data.queuePosition) {
-        setQueuePosition(data.data.queuePosition)
       }
     })
 
@@ -101,7 +118,7 @@ const VisitorChat: React.FC = () => {
       )
     })
 
-    ws.on('CONVERSATION_ENDED', (_data: unknown) => {
+    ws.on('CONVERSATION_ENDED', () => {
       setStatus(3)
       message.info('会话已结束，请对本次服务进行评价')
     })
@@ -116,6 +133,8 @@ const VisitorChat: React.FC = () => {
       initWebSocket()
       setOpen(true)
       setMinimized(false)
+      message.warning('正在建立连接，请稍后再试')
+      return
     }
 
     wsRef.current?.send({

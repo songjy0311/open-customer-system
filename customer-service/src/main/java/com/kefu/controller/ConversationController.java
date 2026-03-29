@@ -55,7 +55,7 @@ public class ConversationController {
             Conversation conversation = conversationService.getById(id);
             if (conversation != null) {
                 visitorWebSocketHandler.notifyVisitorTaken(
-                        conversation.getVisitorId(), id, agentNickname);
+                        conversation.getVisitorId(), id, agentNickname, agentId);
                 List<Long> readIds = messageService.markAsRead(id, agentId.toString());
                 if (!readIds.isEmpty()) {
                     visitorWebSocketHandler.notifyVisitorMessagesRead(

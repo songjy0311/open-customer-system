@@ -48,6 +48,8 @@ const AgentDashboard: React.FC = () => {
   const wsRef = useRef<WebSocketClient | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const selectedConversationRef = useRef<Conversation | null>(null)
+  const pendingOptimisticId = useRef<number | null>(null)
+  const loadingConversationId = useRef<number | null>(null)
 
   const agentId = localStorage.getItem('agentId')
   const agentNickname = localStorage.getItem('agentNickname')
@@ -90,15 +92,41 @@ const AgentDashboard: React.FC = () => {
     })
 
     ws.on('NEW_MESSAGE', (data: { data: Message }) => {
-      if (selectedConversationRef.current?.id === data.data.conversationId) {
-        setMessages((prev) => [...prev, data.data])
-        if (data.data.senderType !== 2) {
-          ws.send({
-            type: 'MARK_READ',
-            conversationId: data.data.conversationId,
-            agentId: Number(agentId)
-          })
-        }
+      const msg = data.data
+      const currentConvId = selectedConversationRef.current?.id
+
+      // 安全守卫：消息必须属于当前选中的会话，或者正在加载中的会话，否则丢弃
+      if (currentConvId == null) return
+      if (currentConvId !== msg.conversationId && loadingConversationId.current !== msg.conversationId) {
+        return
+      }
+
+      // 如果有未确认的乐观消息（发送者自己的消息），用服务器回显替换
+      if (pendingOptimisticId.current !== null) {
+        const tempId = pendingOptimisticId.current
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === tempId)
+          if (idx !== -1) {
+            const updated = [...prev]
+            updated[idx] = msg
+            return updated
+          }
+          return [...prev, msg]
+        })
+        pendingOptimisticId.current = null
+      } else {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev
+          return [...prev, msg]
+        })
+      }
+
+      if (msg.senderType !== 2) {
+        ws.send({
+          type: 'MARK_READ',
+          conversationId: msg.conversationId,
+          agentId: Number(agentId)
+        })
       }
     })
 
@@ -138,6 +166,7 @@ const AgentDashboard: React.FC = () => {
   }
 
   const loadMessages = async (conversationId: number) => {
+    loadingConversationId.current = conversationId
     try {
       const res = await api.get(`/message/history/${conversationId}`)
       if (res.code === 200) {
@@ -150,11 +179,29 @@ const AgentDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Load messages error:', error)
+    } finally {
+      loadingConversationId.current = null
     }
   }
 
   const handleSendMessage = () => {
     if (!inputValue.trim() || !selectedConversation) return
+
+    const tempId = -Date.now()
+    const optimisticMessage: Message = {
+      id: tempId,
+      conversationId: selectedConversation.id,
+      senderType: 2,
+      senderId: agentId || '',
+      senderName: agentNickname || '客服',
+      content: inputValue,
+      messageType: 1,
+      isRead: 1,
+      createdAt: new Date().toISOString()
+    }
+    pendingOptimisticId.current = tempId
+    setMessages((prev) => [...prev, optimisticMessage])
+    setInputValue('')
 
     wsRef.current?.send({
       type: 'AGENT_MESSAGE',
@@ -163,8 +210,6 @@ const AgentDashboard: React.FC = () => {
       agentId: Number(agentId),
       agentNickname
     })
-
-    setInputValue('')
   }
 
   const handleEndConversation = async () => {
@@ -270,7 +315,7 @@ const AgentDashboard: React.FC = () => {
                     >
                       <List.Item.Meta
                         title={item.visitorNickname || '访客'}
-                        description={`会话 #${item.id}`}
+                        description={`会话 #${item.id} (${item.visitorId})`}
                       />
                     </List.Item>
                   )}

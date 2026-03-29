@@ -1,7 +1,6 @@
 package com.kefu.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.kefu.dto.Result;
 import com.kefu.entity.Conversation;
 import com.kefu.entity.Message;
 import com.kefu.enums.ConversationStatus;
@@ -80,19 +79,16 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
         String nickname = (String) data.getOrDefault("nickname", "访客");
         String visitorIp = getClientIp(session);
 
-        // 创建会话
         Conversation conversation = conversationService.createConversation(visitorId, nickname, visitorIp);
 
-        // 返回会话信息
-        Map<String, Object> result = Map.of(
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
                 "type", "CONVERSATION_STARTED",
                 "data", Map.of(
                         "conversationId", conversation.getId(),
                         "status", conversation.getStatus(),
                         "queuePosition", conversation.getQueuePosition()
                 )
-        );
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(result)));
+        ))));
     }
 
     private void handleVisitorMessage(WebSocketSession session, Map<String, Object> data) throws IOException {
@@ -101,17 +97,15 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
         Integer messageType = (Integer) data.getOrDefault("messageType", 1);
         String visitorId = getVisitorId(session);
 
-        // 保存消息
-        Message message = messageService.sendMessage(conversationId, SenderType.VISITOR, visitorId,
+        Message savedMessage = messageService.sendMessage(conversationId, SenderType.VISITOR, visitorId,
                 "访客", content, messageType);
 
-        Map<String, Object> visitorResult = Map.of(
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
                 "type", "NEW_MESSAGE",
-                "data", message
-        );
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(visitorResult)));
+                "data", savedMessage
+        ))));
 
-        agentWebSocketHandler.broadcastToAgent(conversationId, message);
+        agentWebSocketHandler.broadcastToAgent(conversationId, savedMessage);
     }
 
     private void handleMessageRead(WebSocketSession session, Map<String, Object> data) throws IOException {
@@ -128,35 +122,37 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    public void notifyVisitorTaken(String visitorId, Long conversationId, String agentNickname) throws IOException {
+    public void notifyVisitorTaken(String visitorId, Long conversationId, String agentNickname, Long agentId) throws IOException {
+        // 获取历史消息
+        List<Message> historyMessages = messageService.getHistoryMessages(conversationId);
+
         Map<String, Object> result = Map.of(
                 "type", "CONVERSATION_STARTED",
                 "data", Map.of(
                         "conversationId", conversationId,
                         "agentNickname", agentNickname,
-                        "status", ConversationStatus.IN_PROGRESS
+                        "status", ConversationStatus.IN_PROGRESS,
+                        "historyMessages", historyMessages
                 )
         );
         sendToVisitor(visitorId, objectMapper.writeValueAsString(result));
     }
 
     public void notifyVisitorMessagesRead(String visitorId, Long conversationId, List<Long> readMessageIds) throws IOException {
-        Map<String, Object> result = Map.of(
+        sendToVisitor(visitorId, objectMapper.writeValueAsString(Map.of(
                 "type", "MESSAGES_READ",
                 "data", Map.of(
                         "conversationId", conversationId,
                         "readMessageIds", readMessageIds
                 )
-        );
-        sendToVisitor(visitorId, objectMapper.writeValueAsString(result));
+        )));
     }
 
     public void notifyVisitorEnded(String visitorId, Long conversationId) throws IOException {
-        Map<String, Object> result = Map.of(
+        sendToVisitor(visitorId, objectMapper.writeValueAsString(Map.of(
                 "type", "CONVERSATION_ENDED",
                 "data", Map.of("conversationId", conversationId)
-        );
-        sendToVisitor(visitorId, objectMapper.writeValueAsString(result));
+        )));
     }
 
     private String getVisitorId(WebSocketSession session) {
