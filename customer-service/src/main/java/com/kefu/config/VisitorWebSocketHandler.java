@@ -1,6 +1,7 @@
 package com.kefu.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.kefu.entity.Conversation;
 import com.kefu.entity.Message;
 import com.kefu.enums.ConversationStatus;
@@ -40,14 +41,16 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
     private final Map<String, WebSocketSession> visitorSessions = new ConcurrentHashMap<>();
     /** 暂存消息队列，访客重连后按顺序发送 */
     private final Map<String, Queue<String>> pendingMessages = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String visitorId = getVisitorId(session);
+        System.out.println(">>> afterConnectionEstablished: visitorId=" + visitorId + ", sessionId=" + session.getId() + ", params=" + session.getAttributes());
         String key = visitorId != null ? visitorId : session.getId();
         visitorSessions.put(key, session);
-        System.out.println("访客连接建立: " + key);
+        System.out.println("访客连接建立: " + key + ", 当前在线: " + visitorSessions.keySet());
 
         // 重连时发送所有暂存消息（按顺序）
         Queue<String> queue = pendingMessages.remove(key);
@@ -83,14 +86,18 @@ public class VisitorWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String visitorId = getVisitorId(session);
+        System.out.println(">>> afterConnectionClosed: visitorId=" + visitorId + ", status=" + status);
         if (visitorId != null) {
             visitorSessions.remove(visitorId);
+            System.out.println("访客连接关闭: " + visitorId + ", status=" + status + ", 剩余在线: " + visitorSessions.keySet());
         }
-        System.out.println("访客连接关闭: " + visitorId + ", status=" + status);
     }
 
     private void handleVisitorJoin(WebSocketSession session, Map<String, Object> data) throws IOException {
         String visitorId = (String) data.get("visitorId");
+        System.out.println(">>> handleVisitorJoin: visitorId=" + visitorId + ", sessionId=" + session.getId());
+        System.out.println(">>> 已有会话列表: " + visitorSessions.keySet());
+
         String nickname = (String) data.getOrDefault("nickname", "访客");
         String visitorIp = getClientIp(session);
 
