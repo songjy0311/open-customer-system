@@ -63,7 +63,8 @@ public class ConversationController {
                 }
             }
         } catch (Exception e) {
-            // WebSocket 推送失败不影响接手结果
+            System.err.println("ConversationController: Exception in takeConversation: " + e.getMessage());
+            e.printStackTrace();
         }
         return Result.success();
     }

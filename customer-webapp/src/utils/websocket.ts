@@ -26,6 +26,7 @@ class WebSocketClient {
         this.ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
+            console.log('[WS] received ALL:', data.type, JSON.stringify(data))
             const type = data.type
             const callbacks = this.callbacks.get(type)
             if (callbacks) {

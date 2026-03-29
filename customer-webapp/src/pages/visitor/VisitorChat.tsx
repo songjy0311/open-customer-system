@@ -34,7 +34,7 @@ const VisitorChat: React.FC = () => {
   const [inputValue, setInputValue] = useState('')
   const [conversationId, setConversationId] = useState<number | null>(null)
   const [status, setStatus] = useState<number>(0)
-  const [queuePosition, setQueuePosition] = useState(0)
+  const [aheadCount, setAheadCount] = useState(0)
   const [agentNickname, setAgentNickname] = useState('')
   const wsRef = useRef<WebSocketClient | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -42,7 +42,7 @@ const VisitorChat: React.FC = () => {
   const getVisitorId = () => {
     let visitorId = localStorage.getItem('visitorId')
     if (!visitorId) {
-      visitorId = 'visitor_' + Date.now()
+      visitorId = 'v_' + Math.random().toString(36).slice(2, 11) + '_' + Date.now()
       localStorage.setItem('visitorId', visitorId)
     }
     return visitorId
@@ -68,6 +68,11 @@ const VisitorChat: React.FC = () => {
       })
       .catch(console.error)
 
+    ws.on('ALL', (data: any) => {
+      // 调试用，正式环境可删除
+      console.log('[Visitor] ALL event:', data.type, JSON.stringify(data.data))
+    })
+
     ws.on('CONVERSATION_STARTED', (data: {
       data: {
         conversationId: number
@@ -75,9 +80,15 @@ const VisitorChat: React.FC = () => {
         agentNickname?: string
         queuePosition?: number
         historyMessages?: ChatMessage[]
+        aheadCount?: number
       }
     }) => {
-      const { conversationId: convId, status: convStatus, agentNickname: agent, queuePosition: pos, historyMessages } = data.data
+      console.log('[Visitor] CONVERSATION_STARTED received:', JSON.stringify(data.data))
+      const { conversationId: convId, status: convStatus, agentNickname: agent, queuePosition: pos, historyMessages, aheadCount } = data.data
+
+      console.log('[Visitor] status will be set to:', convStatus, '(1=等待中, 2=已接入, 3=结束)')
+      console.log('[Visitor] agentNickname:', agent)
+      console.log('[Visitor] aheadCount:', aheadCount)
 
       // 加载历史消息（客服接手时会推送）
       if (historyMessages && historyMessages.length > 0) {
@@ -89,9 +100,9 @@ const VisitorChat: React.FC = () => {
 
       setConversationId(convId)
       setStatus(convStatus)
-      setQueuePosition(pos || 0)
+      setAheadCount(aheadCount ?? 0)
 
-      if (agent) {
+      if (agent && agent.trim()) {
         setAgentNickname(agent)
         const notice: SystemNotice = {
           id: `notice_${Date.now()}`,
@@ -99,6 +110,9 @@ const VisitorChat: React.FC = () => {
           content: `客服 ${agent} 已接入，开始为您服务`
         }
         setChatItems((prev) => [...prev, notice])
+      } else {
+        // 状态已是 WAITING 或新会话，无需额外处理
+        setAgentNickname('')
       }
     })
 
@@ -150,7 +164,7 @@ const VisitorChat: React.FC = () => {
   const getStatusText = () => {
     switch (status) {
       case 1:
-        return `等待中，当前排队位置: ${queuePosition}`
+        return `等待中，前面还有 ${aheadCount} 人`
       case 2:
         return `已接入，与 ${agentNickname} 对话中`
       case 3:
